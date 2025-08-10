@@ -4,7 +4,8 @@
   "type": "module",
   "dependencies": {
     "formidable": "^3.5.0",
-    "adm-zip": "^0.5.10"
+    "adm-zip": "^0.5.10",
+    "pngquant-bin": "^7.0.1"
   },
   "scripts": {
     "start": "vercel dev"
