@@ -1,0 +1,12 @@
+{
+  "name": "png-compress-api",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "formidable": "^3.5.0",
+    "adm-zip": "^0.5.10"
+  },
+  "scripts": {
+    "start": "vercel dev"
+  }
+}
