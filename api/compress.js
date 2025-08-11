@@ -1,4 +1,4 @@
-// api/compress.js — Colors & Dither 対応（CORS強化・Sharp量子化）
+// api/compress.js — 元ファイル名を維持してZIPに格納（Colors/Dither対応 & CORS強化）
 import { formidable } from "formidable";
 import fs from "fs";
 import os from "os";
@@ -25,61 +25,73 @@ export default async function handler(req, res) {
       multiples: true,
       keepExtensions: true,
       uploadDir: os.tmpdir(),
-      maxFileSize: 25 * 1024 * 1024,
+      maxFileSize: 25 * 1024 * 1024, // 25MB/枚
     });
 
     form.parse(req, async (err, fields, files) => {
       try {
-        if (err) { setCors(res); return res.status(500).json({ error: "Upload error", detail: String(err) }); }
+        if (err) {
+          setCors(res);
+          return res.status(500).json({ error: "Upload error", detail: String(err) });
+        }
 
-        // 受け取り & バリデーション
+        // パラメータ（色数/ディザ）
         const colorsIn = parseInt(fields?.colors?.toString?.() ?? "32", 10);
         const colors = Number.isFinite(colorsIn) ? Math.max(2, Math.min(256, colorsIn)) : 32;
-        const dither = (fields?.dither?.toString?.() ?? "1") === "1"; // true/false
+        const dither = (fields?.dither?.toString?.() ?? "1") === "1";
 
+        // 受け取ったファイル配列を正規化
         const list = files?.files;
         const uploaded = Array.isArray(list) ? list : (list ? [list] : []);
-        if (!uploaded.length) { setCors(res); return res.status(400).json({ error: "No files" }); }
+        if (!uploaded.length) {
+          setCors(res);
+          return res.status(400).json({ error: "No files" });
+        }
 
+        // ZIPを作成（バッファで直接追加 → ファイル名を保持）
+        const zip = new AdmZip();
+
+        // Hobby帯向け：3枚ずつ並列
         const batchSize = 3;
-        const outPaths = [];
-
         for (let i = 0; i < uploaded.length; i += batchSize) {
           const group = uploaded.slice(i, i + batchSize);
           const results = await Promise.all(
             group.map(async (file) => {
-              const outPath = file.filepath + "-min.png";
+              const origName = file.originalFilename || "image.png";
+              const lower = origName.toLowerCase();
+              // JPEGはPNGに変換するので拡張子だけ置換、PNGはそのまま
+              const base = origName.replace(/\.[^/.]+$/, "");
+              const outName = lower.endsWith(".png") ? origName : `${base}.png`;
 
-              // PNG8（パレット）＋色数＆ディザ
-              await sharp(file.filepath)
+              // PNG8（パレット）＋色数＆ディザ → バッファで取得
+              const buf = await sharp(file.filepath)
                 .png({
-                  palette: true,         // パレットPNG（PNG8）
-                  colors,                // 色数（2〜256）
-                  dither: dither ? 1.0 : 0.0, // ディザ強度（0〜1）
-                  compressionLevel: 9,   // Deflate圧縮
-                  effort: 7              // 追加最適化の努力値
+                  palette: true,
+                  colors,
+                  dither: dither ? 1.0 : 0.0,
+                  compressionLevel: 9,
+                  effort: 7,
                 })
-                .toFile(outPath);
+                .toBuffer();
 
-              return outPath;
+              // ZIP内の「ファイル名」に outName を使用（＝元名を維持）
+              zip.addFile(outName, buf);
             })
           );
-          outPaths.push(...results);
+          void results;
         }
 
-        if (!outPaths.length) { setCors(res); return res.status(500).json({ error: "Processing failed" }); }
-
-        const zip = new AdmZip();
-        outPaths.forEach((p) => zip.addLocalFile(p));
         const zipBuf = zip.toBuffer();
 
         setCors(res);
         res.setHeader("Content-Type", "application/zip");
-        res.setHeader("Content-Disposition", "attachment; filename=compressed.zip");
+        res.setHeader("Content-Disposition", 'attachment; filename="compressed.zip"');
         res.end(zipBuf);
 
-        // 後片付け
-        [...uploaded.map((f) => f.filepath), ...outPaths].forEach((p) => { try { fs.unlinkSync(p); } catch {} });
+        // 一時ファイル片付け
+        uploaded.forEach((f) => {
+          try { fs.unlinkSync(f.filepath); } catch {}
+        });
       } catch (e) {
         setCors(res);
         console.error(e);
